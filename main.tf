@@ -16,12 +16,8 @@ module "ec2_instance" {
   }
 }
 
-output "ec2_public_ip" {
-  value = module.ec2_instance.instances[0].public_ip
-}
-
 resource "null_resource" "run_ansible" {
   provisioner "local-exec" {
-    command = "ansible-playbook -i localhost, -e 'ec2_public_ip=${module.ec2_instance.ec2_public_ip}' playbook.yml"
+    command = "ansible-playbook -i localhost, -e 'ec2_public_ip=${module.ec2_instance[0].public_ip}' playbook.yml"
   }
 }
