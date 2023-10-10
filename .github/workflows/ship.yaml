@@ -1,4 +1,4 @@
-name: Prep Terraform
+name: Ship Terraform
 
 on: 
     push:
