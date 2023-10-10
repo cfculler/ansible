@@ -1,0 +1,108 @@
+---
+- hosts: localhost
+  gather_facts: False
+
+  tasks:
+    # Assume an existing role (more details: https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRole.html)
+    - name: "Assume an existing role"
+      community.aws.sts_assume_role:
+        role_arn: "{{ lookup('env', 'AWS_ROLE_TO_ASSUME') }}"
+        role_session_name: "carsonDobSession"
+        aws_access_key: "{{ lookup('env', 'AWS_ACCESS_KEY_ID') }}"
+        aws_secret_key: "{{ lookup('env', 'AWS_SECRET_ACCESS_KEY') }}"
+      register: assumed_role
+
+    - name: Add all instance public IPs to host group
+      add_host: hostname={{ var.ec2_public_ip }} groups=ec2hosts
+
+- hosts: ec2hosts
+  name: Provision the instance
+  user: ec2-user
+  vars:
+    ansible_user: ec2-user
+    ansible_ssh_private_key_file: /Users/carsonculler/Downloads/carson-dob-7.3.pem
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  gather_facts: true
+  
+  tasks:
+    - name: Upgrade all packages
+      become: yes
+      ansible.builtin.yum:
+        name: '*'
+        state: latest
+
+    - name: Install git and dotnet sdk
+      become: yes
+      ansible.builtin.yum:
+        name:
+        - git
+        - dotnet-sdk-6.0
+        state: present
+
+    - name: Create the runner directory if it does not exist
+      ansible.builtin.file:
+        path: /home/ec2-user/actions-runner
+        state: directory
+        mode: '0755'
+
+    - name: Download the latest runner package
+      ansible.builtin.get_url:
+        url: https://github.com/actions/runner/releases/download/v2.309.0/actions-runner-linux-x64-2.309.0.tar.gz
+        dest: /home/ec2-user/actions-runner/actions-runner-linux-x64-2.309.0.tar.gz
+        mode: '0644'
+    
+    - name: Extract the installer
+      ansible.builtin.unarchive:
+        src: /home/ec2-user/actions-runner/actions-runner-linux-x64-2.309.0.tar.gz
+        dest: /home/ec2-user/actions-runner
+        remote_src: yes
+
+    - name: Check if a specific file exists
+      ansible.builtin.stat:
+        path: /home/ec2-user/actions-runner/svc.sh
+      register: specific_file_check
+      ignore_errors: yes
+
+    - name: Create the runner
+      ansible.builtin.shell:
+        cmd: ./config.sh --url https://github.com/cfculler/ansible --token AXYEBMCCGZLOXYRN6EN5YB3FEWEL2 --unattended
+        chdir: actions-runner
+      when: specific_file_check.stat.exists == false  # Run the task only if the specific file doesn't exist
+      
+    - name: Touch again the same file, but do not change times this makes the task idempotent
+      ansible.builtin.file:
+        path: /home/ec2-user/actions-runner/svc.sh
+        state: touch
+        mode: '0755'
+        modification_time: preserve
+        access_time: preserve
+
+    - name: Check if a specific file exists
+      ansible.builtin.stat:
+        path: /etc/systemd/system/actions.runner.cfculler-ansible.ip-172-31-13-142.service
+      register: runner_service
+      ignore_errors: yes
+
+    - name: Start the runner
+      become: yes
+      ansible.builtin.shell:
+        cmd: ./svc.sh install
+        chdir: actions-runner
+      when: runner_service.stat.exists == false
+
+    - name: Reload systemd manager configuration
+      become: yes
+      ansible.builtin.systemd:
+        daemon_reload: yes
+
+    - name: Enable service to start on boot
+      become: yes
+      ansible.builtin.systemd:
+        name: actions.runner.cfculler-ansible.ip-172-31-13-142.service
+        enabled: yes
+      
+    - name: Start the service
+      become: yes
+      ansible.builtin.systemd:
+        name: actions.runner.cfculler-ansible.ip-172-31-13-142.service
+        state: started
